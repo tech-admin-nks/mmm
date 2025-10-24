@@ -9,6 +9,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 import os
 import csv
 import dropbox
+from dotenv import load_dotenv
 
 # --------------------------------------
 # Load environment variables
