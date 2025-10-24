@@ -232,16 +232,18 @@ if df.empty:
 # -------------------------------------------------
 def log_invoice_to_dropbox(items, subtotal, discount, discount_amount, final_total, invoice_number):
     """Append invoice data to Dropbox CSV."""
-    csv_dropbox_path = "/mmm/invoices"
+    csv_dropbox_file = "/mmm/invoices/invoices_log.csv"
     temp_csv = "temp_invoices_log.csv"
 
-    # Try downloading existing CSV
+    # Download existing CSV if it exists
     try:
-        metadata, response = dbx.files_download(csv_dropbox_path)
+        metadata, response = dbx.files_download(csv_dropbox_file)
         with open(temp_csv, "wb") as f:
             f.write(response.content)
     except dropbox.exceptions.ApiError:
-        open(temp_csv, "w").close()
+        # File doesn't exist; create a new CSV
+        with open(temp_csv, "w", newline='', encoding="utf-8") as f:
+            pass
 
     # Append new record
     item_list = "; ".join([f"{i['Medicine']} x {i['Quantity']}" for i in items])
@@ -262,8 +264,8 @@ def log_invoice_to_dropbox(items, subtotal, discount, discount_amount, final_tot
             writer.writeheader()
         writer.writerow(record)
 
-    # Upload back to Dropbox
-    upload_file_to_dropbox(dbx,temp_csv, csv_dropbox_path,"invoices_log.csv")
+    # Upload updated CSV back to Dropbox
+    upload_file_to_dropbox(dbx, temp_csv, "/mmm/invoices", "invoices_log.csv")
     os.remove(temp_csv)
     
 # -------------------------------
