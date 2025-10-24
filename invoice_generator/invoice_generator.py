@@ -8,9 +8,87 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 import os
 import csv
+import dropbox
+
+# --------------------------------------
+# Load environment variables
+# --------------------------------------
+#load_dotenv()
+
+DROPBOX_APP_KEY = "q8xt5uwzuh99twt"
+DROPBOX_APP_SECRET = "ohkka0khxy690fe"
+DROPBOX_REFRESH_TOKEN = "xdW2XP72YyoAAAAAAAAAAfN0dkkbdqHnNwzzsz7eOl6pc9OM9Rjb2Cya7My4pmUl"
 
 st.set_page_config(page_title="Medicine Shop Invoice", page_icon="💊", layout="centered")
 st.title("💊 Medicine Shop Invoice Generator")
+
+
+# -------------------------------------------------
+# Dropbox Connection
+# -------------------------------------------------
+def ensure_dropbox_folder(dbx, folder_path):
+    """
+    Create a Dropbox folder if it doesn't exist.
+    Silently ignores "folder already exists" errors.
+    """
+    try:
+        dbx.files_create_folder_v2(folder_path)
+    except dropbox.exceptions.ApiError as e:
+        # Check if error is "folder already exists"
+        if (isinstance(e.error, dropbox.files.CreateFolderError) 
+            and e.error.is_path() 
+            and e.error.get_path().is_conflict()):
+            pass  # Folder exists, no problem
+        else:
+            raise e  # Other errors, re-raise
+            
+def connect_to_dropbox():
+    try:
+        dbx = dropbox.Dropbox(
+            app_key=DROPBOX_APP_KEY,
+            app_secret=DROPBOX_APP_SECRET,
+            oauth2_refresh_token=DROPBOX_REFRESH_TOKEN
+        )
+        st.sidebar.success("✅ Connected to Dropbox")
+        return dbx
+    except Exception as e:
+        st.sidebar.error(f"❌ Dropbox connection failed: {e}")
+        return None
+
+dbx = connect_to_dropbox()
+
+# -------------------------------------------------
+# Dropbox Helper Functions
+# -------------------------------------------------
+def download_json_from_dropbox(dbx, dropbox_path):
+    """
+    Download a JSON file from Dropbox and parse it.
+    Returns a dictionary if successful, or None if file doesn't exist.
+    """
+    try:
+        metadata, response = dbx.files_download(dropbox_path)
+        return json.loads(response.content.decode("utf-8"))
+    except dropbox.exceptions.ApiError:
+        # File not found or other API errors
+        return None
+
+def upload_file_to_dropbox(dbx, local_path, dropbox_folder, dropbox_filename):
+    """
+    Upload a local file to Dropbox under the specified folder and filename.
+    Automatically creates the folder if it doesn't exist.
+    Returns the full Dropbox path.
+    """
+    ensure_dropbox_folder(dbx, dropbox_folder)
+    dropbox_path = f"{dropbox_folder}/{dropbox_filename}"
+
+    with open(local_path, "rb") as f:
+        dbx.files_upload(f.read(), dropbox_path, mode=dropbox.files.WriteMode("overwrite"))
+    
+    return dropbox_path
+
+def upload_bytes_to_dropbox(data_bytes, dropbox_path):
+    """Upload byte content directly (for PDFs)."""
+    dbx.files_upload(data_bytes, dropbox_path, mode=dropbox.files.WriteMode("overwrite"))
 
 # -------------------------------
 # Static Shop Information
@@ -36,7 +114,8 @@ st.sidebar.markdown(f"**Invoice Number:** {invoice_number}")
 # -------------------------------
 # Medicine List Upload (Optional Expander)
 # -------------------------------
-json_path = "../data/price_list.json"
+
+dropbox_json_path = "/mmm/data/price_list.json"
 
 default_medicine_data = {
     "Paracetamol:Dolo 650": 12.0,
@@ -46,29 +125,30 @@ default_medicine_data = {
     "Vitamin C:Celin 500": 6.0
 }
 
-# Load existing JSON if present
-if os.path.exists(json_path):
-    with open(json_path, "r") as f:
-        try:
-            saved_data = json.load(f)
-            default_medicine_data.update(saved_data)
-        except:
-            st.warning("Saved JSON is invalid, using defaults.")
+saved_data = download_json_from_dropbox(dbx,dropbox_json_path)
+if saved_data and isinstance(saved_data, dict):
+    default_medicine_data.update(saved_data)
+    st.success("💾 Loaded medicine data from Dropbox.")
+else:
+    st.warning("⚠️ No valid price list in Dropbox — using defaults.")
 
+# Optional: Upload updated price list
 with st.expander("📦 Upload Medicine Price JSON (optional)"):
     uploaded_file = st.file_uploader("Upload JSON", type="json")
     if uploaded_file:
         try:
             uploaded_data = json.load(uploaded_file)
             if isinstance(uploaded_data, dict):
-                default_medicine_data.update(uploaded_data)
-                with open(json_path, "w") as f:
-                    json.dump(default_medicine_data, f, indent=2)
-                st.success("✅ Medicine price list updated successfully!")
+                dbx.files_upload(
+                    json.dumps(uploaded_data, indent=2).encode("utf-8"),
+                    dropbox_json_path,
+                    mode=dropbox.files.WriteMode("overwrite")
+                )
+                st.success("✅ Medicine price list updated to Dropbox!")
             else:
-                st.error("JSON must be a dictionary like { 'name:brand': price }")
+                st.error("❌ JSON must be a dictionary { 'name:brand': price }")
         except Exception as e:
-            st.error(f"Failed to load JSON: {e}")
+            st.error(f"Error uploading JSON: {e}")
 
 medicine_data = default_medicine_data
 medicine_options = list(medicine_data.keys())
@@ -132,20 +212,28 @@ if "invoice_items" in st.session_state and st.session_state.invoice_items:
 
 if df.empty:
     st.info("No items added yet.")
-# -------------------------------
-# LOG Generation Function
-# -------------------------------
 
-def log_invoice_to_csv(items, subtotal, discount, discount_amount, final_total,invoice_number):
-    
-    csv_file = "../invoice/invoices_log.csv"
-    invoice_no = invoice_number #f"INV{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    date_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+# -------------------------------------------------
+# Invoice Logging (to Dropbox)
+# -------------------------------------------------
+def log_invoice_to_dropbox(items, subtotal, discount, discount_amount, final_total, invoice_number):
+    """Append invoice data to Dropbox CSV."""
+    csv_dropbox_path = "/mmm/invoices"
+    temp_csv = "temp_invoices_log.csv"
+
+    # Try downloading existing CSV
+    try:
+        metadata, response = dbx.files_download(csv_dropbox_path)
+        with open(temp_csv, "wb") as f:
+            f.write(response.content)
+    except dropbox.exceptions.ApiError:
+        open(temp_csv, "w").close()
+
+    # Append new record
     item_list = "; ".join([f"{i['Medicine']} x {i['Quantity']}" for i in items])
-
     record = {
-        "Invoice No": invoice_no,
-        "DateTime": date_time,
+        "Invoice No": invoice_number,
+        "DateTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "Items": item_list,
         "Subtotal": round(subtotal, 2),
         "Discount (%)": discount,
@@ -153,27 +241,25 @@ def log_invoice_to_csv(items, subtotal, discount, discount_amount, final_total,i
         "Final Total": round(final_total, 2)
     }
 
-    file_exists = os.path.exists(csv_file)
-    with open(csv_file, mode="a", newline='', encoding="utf-8") as f:
+    file_exists = os.path.getsize(temp_csv) > 0
+    with open(temp_csv, mode="a", newline='', encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=record.keys())
         if not file_exists:
             writer.writeheader()
         writer.writerow(record)
+
+    # Upload back to Dropbox
+    upload_file_to_dropbox(dbx,temp_csv, csv_dropbox_path,"invoices_log.csv")
+    os.remove(temp_csv)
+    
 # -------------------------------
 # PDF Generation Function
 # -------------------------------
 def generate_invoice_pdf(items_df, subtotal, discount, discount_amount, final_total, invoice_number,
                          customer_name="", customer_phone=""):
-                             
-    now = datetime.now()
-    folder_path = os.path.join("..", "invoice", now.strftime("%Y"), now.strftime("%m"), now.strftime("%d"))
-    os.makedirs(folder_path, exist_ok=True)  # Automatically create folders if missing
-
-    # Build filename inside that folder
-    filename = os.path.join(folder_path, f"Invoice_{invoice_number}.pdf")
-    
-    #filename = f"../invoice/Invoice_{invoice_number}.pdf"
-    pdf = SimpleDocTemplate(filename, pagesize=A4)
+    from io import BytesIO
+    pdf_buffer = BytesIO()
+    pdf = SimpleDocTemplate(pdf_buffer, pagesize=A4)
     styles = getSampleStyleSheet()
     elements = []
 
@@ -181,39 +267,32 @@ def generate_invoice_pdf(items_df, subtotal, discount, discount_amount, final_to
     if LOGO_FILE:
         elements.append(Image(LOGO_FILE, width=80, height=60))
         elements.append(Spacer(1, 8))
-
-    # Shop Details
+        
     elements.append(Paragraph(f"<b>{SHOP_NAME}</b>", styles["Title"]))
     elements.append(Paragraph(SHOP_ADDRESS, styles["Normal"]))
     elements.append(Paragraph(f"Registration No: {SHOP_REG}", styles["Normal"]))
-    elements.append(Spacer(1, 12))
+    elements.append(Spacer(1, 10))
 
-    # Customer Details (optional)
     if customer_name:
         elements.append(Paragraph(f"Customer Name: {customer_name}", styles["Normal"]))
     if customer_phone:
         elements.append(Paragraph(f"Customer Phone: {customer_phone}", styles["Normal"]))
 
-    # Invoice Number & Date
-    elements.append(Paragraph(f"Invoice Number: {invoice_number}", styles["Normal"]))
-    elements.append(Paragraph(f"Invoice Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles["Normal"]))
+    elements.append(Paragraph(f"Invoice No: {invoice_number}", styles["Normal"]))
+    elements.append(Paragraph(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles["Normal"]))
     elements.append(Spacer(1, 10))
 
-    # Items Table
-    if not items_df.empty:
-        data = [["Medicine", "Unit Price", "Quantity", "Total"]] + items_df.values.tolist()
-        table = Table(data, colWidths=[200, 80, 80, 80])
-        table.setStyle(TableStyle([
-            ("BACKGROUND", (0,0), (-1,0), colors.lightblue),
-            ("TEXTCOLOR", (0,0), (-1,0), colors.black),
-            ("ALIGN", (0,0), (-1,-1), "CENTER"),
-            ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
-            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold")
-        ]))
-        elements.append(table)
-        elements.append(Spacer(1, 20))
+    data = [["Medicine", "Unit Price", "Quantity", "Total"]] + items_df.values.tolist()
+    table = Table(data, colWidths=[200, 80, 80, 80])
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), colors.lightblue),
+        ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+        ("ALIGN", (0,0), (-1,-1), "CENTER"),
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold")
+    ]))
+    elements.append(table)
+    elements.append(Spacer(1, 10))
 
-    # Totals Table
     summary = [
         ["Subtotal", f"{subtotal:.2f} INR"],
         [f"Discount ({discount}%)", f"-{discount_amount:.2f} INR"],
@@ -226,31 +305,31 @@ def generate_invoice_pdf(items_df, subtotal, discount, discount_amount, final_to
         ("FONTNAME", (-1,-1), (-1,-1), "Helvetica-Bold")
     ]))
     elements.append(sum_table)
-
     pdf.build(elements)
-    return filename
+    pdf_data = pdf_buffer.getvalue()
+
+    # Upload to Dropbox
+    folder_path = f"/mmm/invoices/{datetime.now():%Y/%m/%d}"
+    ensure_dropbox_folder(dbx, folder_path)
+    dropbox_file_path = f"{folder_path}/Invoice_{invoice_number}.pdf"
+    upload_bytes_to_dropbox(pdf_data, dropbox_file_path)
+
+    return pdf_data
+
     
-# -------------------------------
-# Discount and Final Total
-# -------------------------------
-discount = st.number_input("Discount (%)", min_value=0.0, max_value=100.0, value=18.0,step=0.5)
+# -------------------------------------------------
+# Final Calculation & Buttons
+# -------------------------------------------------
+discount = st.number_input("Discount (%)", min_value=0.0, max_value=100.0, value=18.0, step=0.5)
 discount_amount = subtotal * discount / 100
 
 if st.button("💰 Generate Bill"):
     final_total = subtotal - discount_amount
-
-    if (final_total>0): 
-        log_invoice_to_csv(st.session_state.invoice_items, subtotal, discount, discount_amount, final_total,invoice_number)
-
-    st.write(f"**Subtotal:** ₹{subtotal:.2f}")
-    st.write(f"**Discount ({discount}%):** ₹{discount_amount:.2f}")
-    st.write(f"### 💰 Final Amount: ₹{final_total:.2f}")
-        
-    if not df.empty:
-        pdf_file = generate_invoice_pdf(df, subtotal, discount, discount_amount, final_total,
-                                        invoice_number, customer_name, customer_phone)
-        with open(pdf_file, "rb") as f:
-            st.download_button("⬇️ Download Invoice PDF", f, file_name=pdf_file)
+    if final_total > 0 and not df.empty:
+        log_invoice_to_dropbox(st.session_state.invoice_items, subtotal, discount, discount_amount, final_total, invoice_number)
+        pdf_data = generate_invoice_pdf(df, subtotal, discount, discount_amount, final_total, invoice_number, customer_name, customer_phone)
+        st.download_button("⬇️ Download Invoice PDF", pdf_data, file_name=f"Invoice_{invoice_number}.pdf")
+        st.success("✅ Invoice saved to Dropbox and ready for download.")
     else:
-        st.error("Add at least one item before generating the invoice.")
+        st.error("Please add items before generating an invoice.")
 
