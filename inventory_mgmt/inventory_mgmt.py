@@ -67,6 +67,7 @@ def upload_file_to_dropbox(dbx, local_file, dropbox_folder, dropbox_filename):
 # -------------------------------
 dropbox_folder = "/mmm/sales"
 dropbox_csv_file = f"{dropbox_folder}/main_sales.csv"
+print(dropbox_csv_file)
 dropbox_json_file = f"/mmm/data/price_list.json"
 
 # -------------------------------
