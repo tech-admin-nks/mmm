@@ -13,11 +13,11 @@ import dropbox
 # --------------------------------------
 # Load environment variables
 # --------------------------------------
-#load_dotenv()
+load_dotenv()
 
-DROPBOX_APP_KEY = "q8xt5uwzuh99twt"
-DROPBOX_APP_SECRET = "ohkka0khxy690fe"
-DROPBOX_REFRESH_TOKEN = "xdW2XP72YyoAAAAAAAAAAfN0dkkbdqHnNwzzsz7eOl6pc9OM9Rjb2Cya7My4pmUl"
+DROPBOX_APP_KEY = os.getenv("DROPBOX_APP_KEY", st.secrets.get("DROPBOX_APP_KEY", ""))
+DROPBOX_APP_SECRET = os.getenv("DROPBOX_APP_SECRET", st.secrets.get("DROPBOX_APP_SECRET", ""))
+DROPBOX_REFRESH_TOKEN = os.getenv("DROPBOX_REFRESH_TOKEN", st.secrets.get("DROPBOX_REFRESH_TOKEN", ""))
 
 st.set_page_config(page_title="Medicine Shop Invoice", page_icon="💊", layout="centered")
 st.title("💊 Medicine Shop Invoice Generator")
