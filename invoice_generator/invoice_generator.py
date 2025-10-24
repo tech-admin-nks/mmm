@@ -90,14 +90,27 @@ def upload_file_to_dropbox(dbx, local_path, dropbox_folder, dropbox_filename):
 def upload_bytes_to_dropbox(data_bytes, dropbox_path):
     """Upload byte content directly (for PDFs)."""
     dbx.files_upload(data_bytes, dropbox_path, mode=dropbox.files.WriteMode("overwrite"))
-
+    
+def get_file_bytes_from_dropbox(dbx, dropbox_path):
+    """
+    Download a file from Dropbox and return its bytes.
+    Returns None if file not found.
+    """
+    try:
+        metadata, response = dbx.files_download(dropbox_path)
+        return response.content
+    except dropbox.exceptions.ApiError:
+        st.warning(f"⚠️ File not found on Dropbox: {dropbox_path}")
+        return None
+        
 # -------------------------------
 # Static Shop Information
 # -------------------------------
 SHOP_NAME = "M.M. Medicine"
 SHOP_ADDRESS = "Palishgram, Mongalkote, Purba Bardhaman, WB - 713147, Phone: 8918233696"
 SHOP_REG = "REG-123456"
-LOGO_FILE = "../data/logo2.png"  # Optional path to logo
+dropbox_logo_path = "/mmm/data/logo2.png"  # Optional path to logo
+logo_bytes = get_file_bytes_from_dropbox(dbx, dropbox_logo_path)
 
 # -------------------------------
 # Customer Info Sidebar (optional)
@@ -265,9 +278,11 @@ def generate_invoice_pdf(items_df, subtotal, discount, discount_amount, final_to
     elements = []
 
     # Logo
-    if LOGO_FILE:
-        elements.append(Image(LOGO_FILE, width=80, height=60))
+    if logo_bytes:
+        elements.append(Image(BytesIO(logo_bytes), width=80, height=60))
         elements.append(Spacer(1, 8))
+    else:
+        st.warning("⚠️ Logo could not be loaded from Dropbox, skipping logo.")
         
     elements.append(Paragraph(f"<b>{SHOP_NAME}</b>", styles["Title"]))
     elements.append(Paragraph(SHOP_ADDRESS, styles["Normal"]))
