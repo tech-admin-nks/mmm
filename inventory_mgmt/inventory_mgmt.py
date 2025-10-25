@@ -43,6 +43,17 @@ def ensure_dropbox_folder(dbx, folder_path):
         else:
             raise e
 
+# def download_csv_from_dropbox(dbx, dropbox_file_path):
+#     """Download CSV from Dropbox and return as DataFrame"""
+#     try:
+#         metadata, res = dbx.files_download(dropbox_file_path)
+#         df = pd.read_csv(res.content)
+#         st.sidebar.success(f"📦 Loaded CSV from Dropbox: {dropbox_file_path}")
+#     except Exception:
+#         df = pd.DataFrame(columns=["med_name", "unit_price", "quantity"])
+#         st.sidebar.warning("⚠️ No CSV found in Dropbox. Created empty dataset.")
+#     return df
+
 def download_csv_from_dropbox(dbx, dropbox_file_path):
     """Download CSV from Dropbox and return as DataFrame"""
     try:
@@ -50,8 +61,18 @@ def download_csv_from_dropbox(dbx, dropbox_file_path):
         df = pd.read_csv(res.content)
         st.sidebar.success(f"📦 Loaded CSV from Dropbox: {dropbox_file_path}")
     except Exception:
+        st.sidebar.warning("⚠️ No CSV found. Creating a blank one...")
         df = pd.DataFrame(columns=["med_name", "unit_price", "quantity"])
-        st.sidebar.warning("⚠️ No CSV found in Dropbox. Created empty dataset.")
+        # Save blank CSV immediately
+        temp_csv = "temp_blank.csv"
+        df.to_csv(temp_csv, index=False)
+        folder = os.path.dirname(dropbox_file_path)
+        if folder == "":
+            folder = "/"
+        ensure_dropbox_folder(dbx, folder)
+        dbx.files_upload(open(temp_csv, "rb").read(), dropbox_file_path, mode=dropbox.files.WriteMode("overwrite"))
+        os.remove(temp_csv)
+        st.sidebar.info("✅ Blank CSV created in Dropbox.")
     return df
 
 def upload_file_to_dropbox(dbx, local_file, dropbox_folder, dropbox_filename):
@@ -67,7 +88,6 @@ def upload_file_to_dropbox(dbx, local_file, dropbox_folder, dropbox_filename):
 # -------------------------------
 dropbox_folder = "/mmm/sales"
 dropbox_csv_file = f"{dropbox_folder}/main_sales.csv"
-st.write(dropbox_csv_file)
 dropbox_json_file = f"/mmm/data/price_list.json"
 
 # -------------------------------
