@@ -55,25 +55,38 @@ def ensure_dropbox_folder(dbx, folder_path):
 #     return df
 
 def download_csv_from_dropbox(dbx, dropbox_file_path):
-    """Download CSV from Dropbox and return as DataFrame"""
+    """Download CSV from Dropbox. If missing, create a blank one and reload."""
     try:
         metadata, res = dbx.files_download(dropbox_file_path)
-        df = pd.read_csv(res.content)
+        import io
+        df = pd.read_csv(io.BytesIO(res.content))
         st.sidebar.success(f"📦 Loaded CSV from Dropbox: {dropbox_file_path}")
-    except Exception:
-        st.sidebar.warning("⚠️ No CSV found. Creating a blank one...")
+        return df
+
+    except dropbox.exceptions.ApiError:
+        # File not found → create a blank CSV
+        st.sidebar.warning("⚠️ No CSV found in Dropbox. Creating a blank one...")
+
         df = pd.DataFrame(columns=["med_name", "unit_price", "quantity"])
-        # Save blank CSV immediately
-        temp_csv = "temp_blank.csv"
+        temp_csv = "temp_main_sales.csv"
         df.to_csv(temp_csv, index=False)
-        folder = os.path.dirname(dropbox_file_path)
-        if folder == "":
-            folder = "/"
-        ensure_dropbox_folder(dbx, folder)
-        dbx.files_upload(open(temp_csv, "rb").read(), dropbox_file_path, mode=dropbox.files.WriteMode("overwrite"))
+
+        # Ensure folder exists before upload
+        folder_path = os.path.dirname(dropbox_file_path)
+        if not folder_path:
+            folder_path = "/"
+        ensure_dropbox_folder(dbx, folder_path)
+
+        # Upload blank CSV
+        with open(temp_csv, "rb") as f:
+            dbx.files_upload(f.read(), dropbox_file_path, mode=dropbox.files.WriteMode("overwrite"))
         os.remove(temp_csv)
-        st.sidebar.info("✅ Blank CSV created in Dropbox.")
-    return df
+
+        st.sidebar.info("✅ Blank CSV created and uploaded to Dropbox.")
+
+        # Return the newly created blank DataFrame
+        return df
+
 
 def upload_file_to_dropbox(dbx, local_file, dropbox_folder, dropbox_filename):
     """Upload a file to Dropbox"""
